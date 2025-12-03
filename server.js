@@ -1,42 +1,47 @@
 import express from "express";
-import { create } from "venom-bot";
 import cors from "cors";
+import qrcode from "qrcode-terminal";
+import pkg from "whatsapp-web.js";
+const { Client, LocalAuth } = pkg;
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-let client;
+// Inicializa o cliente WhatsApp
+const client = new Client({
+    authStrategy: new LocalAuth(),
+    puppeteer: {
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    }
+});
 
-create({
-  session: "achady-session",
-  multidevice: true
-})
-  .then((c) => {
-    client = c;
-    console.log("🚀 WhatsApp conectado! Aguarde QR CODE nos logs.");
-  })
-  .catch((e) => {
-    console.error("Erro ao iniciar Venom:", e);
-  });
+client.on("qr", (qr) => {
+    console.log("🔵 QR CODE GERADO. ESCANEIE ABAIXO:");
+    qrcode.generate(qr, { small: true });
+});
 
+client.on("ready", () => {
+    console.log("✅ WhatsApp conectado com sucesso!");
+});
+
+client.initialize();
+
+// Rota para enviar mensagens
 app.post("/enviarMensagem", async (req, res) => {
-  const { grupo, mensagem } = req.body;
+    const { grupo, mensagem } = req.body;
 
-  if (!client) {
-    return res.status(500).json({ error: "Cliente WhatsApp não conectado." });
-  }
-
-  try {
-    await client.sendText(grupo, mensagem);
-    res.json({ status: "OK", enviado_para: grupo });
-  } catch (error) {
-    res.status(500).json({ error: "Falha ao enviar mensagem", detalhe: error });
-  }
+    try {
+        await client.sendMessage(grupo, mensagem);
+        res.json({ status: "ok", enviado: grupo });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "Erro ao enviar mensagem." });
+    }
 });
 
 app.get("/", (req, res) => {
-  res.send("Servidor WhatsApp ACHADY está ativo.");
+    res.send("Servidor WhatsApp Achady está rodando.");
 });
 
-app.listen(3000, () => console.log("Servidor rodando na porta 3000"));
+app.listen(3000, () => console.log("🌐 Servidor rodando na porta 3000"));
