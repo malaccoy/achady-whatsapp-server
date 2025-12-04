@@ -9,69 +9,114 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-console.log("🔄 Inicializando cliente WhatsApp...");
+// Guarda múltiplas sessões (1 por usuário do Achady)
+let sessions = {};
 
-const client = new Client({
-    restartOnAuthFail: true,
-    authStrategy: new LocalAuth(),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-software-rasterizer'
-        ]
+// Criar uma sessão WhatsApp para cada userId
+async function createSession(userId) {
+    if (sessions[userId]) {
+        return sessions[userId];
     }
-});
 
-// ================================================================
-// 🔥 QR CODE EM PNG BASE64 — PERFEITO PARA ESCANEAR 🔥
-// ================================================================
-client.on("qr", async (qr) => {
-    console.log("📌 QR CODE GERADO — IMAGEM BASE64 ABAIXO:");
+    const client = new Client({
+        restartOnAuthFail: true,
+        authStrategy: new LocalAuth({ clientId: userId }),
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--disable-software-rasterizer'
+            ]
+        }
+    });
 
-    const qrImage = await QRCode.toDataURL(qr, { margin: 2 });
+    sessions[userId] = {
+        client,
+        qr: null,
+        ready: false,
+        status: "starting"
+    };
 
-    console.log(qrImage);  // <<--- AQUI SAI O QR COMO IMAGEM
-    console.log("📌 COPIE TODO O TEXTO ACIMA E ENVIE PARA O CHATGPT");
-});
+    client.on("qr", async (qr) => {
+        console.log("📌 QR CODE GERADO PARA USER:", userId);
+        const pngQR = await QRCode.toDataURL(qr);
+        sessions[userId].qr = pngQR;
+        sessions[userId].status = "qr";
+    });
 
-client.on("ready", () => {
-    console.log("✅ WhatsApp conectado e pronto para uso!");
-});
+    client.on("ready", () => {
+        console.log("✅ WhatsApp conectado para:", userId);
+        sessions[userId].ready = true;
+        sessions[userId].status = "ready";
+    });
 
-client.on("auth_failure", () => {
-    console.log("❌ Falha de autenticação. Será gerado um novo QR.");
-});
+    client.on("auth_failure", () => {
+        console.log("❌ Falha de autenticação:", userId);
+        sessions[userId].status = "auth_failure";
+    });
 
-client.initialize();
+    client.initialize();
+    return sessions[userId];
+}
 
 // =================================================================
-// 📩 ROTA PARA ENVIAR MENSAGENS PARA GRUPOS
+// 🔥 ROTA PARA INICIAR SESSÃO E GERAR QR
 // =================================================================
-app.post("/enviarMensagem", async (req, res) => {
-    const { grupo, mensagem } = req.body;
+app.get("/generate-qr/:userId", async (req, res) => {
+    const { userId } = req.params;
+    await createSession(userId);
+    res.json({ ok: true, message: "Sessão iniciada. Busque o QR em /qr/" + userId });
+});
+
+// =================================================================
+// 🔥 ROTA PARA BUSCAR QR CODE EM PNG BASE64
+// =================================================================
+app.get("/qr/:userId", (req, res) => {
+    const { userId } = req.params;
+    const session = sessions[userId];
+
+    if (!session) {
+        return res.json({ qr: null, status: "no-session" });
+    }
+
+    res.json({
+        qr: session.qr,
+        status: session.status
+    });
+});
+
+// =================================================================
+// 📩 ROTA PARA ENVIAR MENSAGEM AO GRUPO
+// =================================================================
+app.post("/send", async (req, res) => {
+    const { userId, groupId, message } = req.body;
+
+    const session = sessions[userId];
+    if (!session || !session.ready) {
+        return res.status(400).json({ error: "Sessão não conectada" });
+    }
 
     try {
-        await client.sendMessage(grupo, mensagem);
-        res.json({ status: "ok", enviado: grupo });
+        await session.client.sendMessage(groupId, message);
+        res.json({ success: true });
     } catch (error) {
-        console.error("Erro ao enviar:", error);
+        console.log(error);
         res.status(500).json({ error: "Erro ao enviar mensagem" });
     }
 });
 
 // =================================================================
-// 🌐 ROTA INICIAL PARA TESTE
+// 🌐 ROTA DE TESTE
 // =================================================================
 app.get("/", (req, res) => {
     res.send("Servidor WhatsApp Achady está rodando. 🚀");
 });
 
 // =================================================================
-// 🔥 INICIAR SERVIDOR
+// INICIAR SERVIDOR
 // =================================================================
 app.listen(3000, () => {
     console.log("🌐 Servidor rodando na porta 3000");
