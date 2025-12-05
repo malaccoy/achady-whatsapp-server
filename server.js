@@ -1,13 +1,11 @@
-// server.js
-import express from "express";
-import cors from "cors";
-import pkg from "whatsapp-web.js";
-import qrcode from "qrcode";
-import sqlite3 from "sqlite3";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+// server.js - versão CommonJS estável
 
-const { Client, LocalAuth } = pkg;
+const express = require("express");
+const cors = require("cors");
+const { Client, LocalAuth } = require("whatsapp-web.js");
+const qrcode = require("qrcode");
+const sqlite3 = require("sqlite3").verbose();
+const path = require("path");
 
 // ==========================
 // ✅ APP EXPRESS
@@ -17,16 +15,12 @@ app.use(cors());
 app.use(express.json());
 
 // ==========================
-// ✅ SQLITE (SEM 'sqlite', APENAS 'sqlite3')
+// ✅ SQLITE (sqlite3 + CommonJS)
 // ==========================
 
-// Resolve caminho absoluto do arquivo de banco
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const dbPath = path.join(__dirname, "history.db");
 
-// Instância bruta do sqlite3
-const rawDb = new sqlite3.Database(dbPath, (err) => {
+const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
     console.error("❌ Erro ao conectar no SQLite:", err.message);
   } else {
@@ -34,50 +28,58 @@ const rawDb = new sqlite3.Database(dbPath, (err) => {
   }
 });
 
-// Pequeno wrapper com Promises pra poder usar "await db.run / db.all"
-const db = {
-  run(sql, params = []) {
-    return new Promise((resolve, reject) => {
-      rawDb.run(sql, params, function (err) {
-        if (err) return reject(err);
-        resolve(this);
-      });
-    });
-  },
-  all(sql, params = []) {
-    return new Promise((resolve, reject) => {
-      rawDb.all(sql, params, (err, rows) => {
-        if (err) return reject(err);
-        resolve(rows);
-      });
-    });
-  },
-};
-
-// Cria tabela se não existir
-async function initDatabase() {
-  await db.run(`
-    CREATE TABLE IF NOT EXISTS history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      userId TEXT,
-      groupName TEXT,
-      message TEXT,
-      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+function initDatabase() {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `
+      CREATE TABLE IF NOT EXISTS history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        userId TEXT,
+        groupName TEXT,
+        message TEXT,
+        createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `,
+      (err) => {
+        if (err) {
+          console.error("❌ Erro ao criar tabela history:", err.message);
+          return reject(err);
+        }
+        console.log("✅ Tabela 'history' pronta");
+        resolve();
+      }
     );
-  `);
-  console.log("✅ Tabela 'history' pronta");
+  });
+}
+
+// Helpers com Promise
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) return reject(err);
+      resolve(this);
+    });
+  });
+}
+
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows);
+    });
+  });
 }
 
 // ==========================
 // ✅ SESSÕES WHATSAPP
 // ==========================
-let sessions = {};
+const sessions = {};
 
-/**
- * Cria (ou reaproveita) uma sessão de WhatsApp para o userId
- */
 async function createSession(userId) {
   if (sessions[userId]) return sessions[userId];
+
+  console.log("➡️ Criando sessão para USER:", userId);
 
   const client = new Client({
     puppeteer: {
@@ -100,7 +102,7 @@ async function createSession(userId) {
     try {
       sessions[userId].qr = await qrcode.toDataURL(qr);
       sessions[userId].status = "qr";
-      console.log(`🔑 QR atualizado para USER ${userId}`);
+      console.log(`📌 QR CODE GERADO PARA USER: ${userId}`);
     } catch (err) {
       console.error("Erro ao gerar QRCode:", err);
     }
@@ -108,7 +110,7 @@ async function createSession(userId) {
 
   client.on("ready", () => {
     sessions[userId].status = "ready";
-    console.log(`✅ WhatsApp pronto USER ${userId}`);
+    console.log(`✅ WhatsApp conectado — USER ${userId}`);
   });
 
   client.on("disconnected", (reason) => {
@@ -173,6 +175,8 @@ app.post("/join/:userId", async (req, res) => {
     const code = invite.split("/").pop();
     const result = await session.client.acceptInvite(code);
 
+    console.log("✅ Entrou no grupo com sucesso — USER", userId);
+
     res.json({
       success: true,
       group: result.gid._serialized,
@@ -198,7 +202,7 @@ app.post("/send/:userId", async (req, res) => {
 
     await session.client.sendMessage(groupId, message);
 
-    await db.run(
+    await dbRun(
       "INSERT INTO history (userId, groupName, message) VALUES (?, ?, ?)",
       [userId, groupId, message]
     );
@@ -234,7 +238,7 @@ app.post("/auto/:userId", async (req, res) => {
       try {
         await session.client.sendMessage(groupId, message);
 
-        await db.run(
+        await dbRun(
           "INSERT INTO history (userId, groupName, message) VALUES (?, ?, ?)",
           [userId, groupId, message]
         );
@@ -253,7 +257,7 @@ app.post("/auto/:userId", async (req, res) => {
 // Histórico
 app.get("/history", async (req, res) => {
   try {
-    const rows = await db.all("SELECT * FROM history ORDER BY id DESC");
+    const rows = await dbAll("SELECT * FROM history ORDER BY id DESC");
     res.json(rows);
   } catch (err) {
     console.error("Erro em /history:", err);
@@ -274,7 +278,7 @@ const PORT = process.env.PORT || 3000;
 initDatabase()
   .then(() => {
     app.listen(PORT, () => {
-      console.log(`🚀 Achady Online na porta ${PORT}`);
+      console.log(`🌐 Servidor rodando na porta ${PORT}`);
     });
   })
   .catch((err) => {
