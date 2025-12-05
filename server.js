@@ -14,7 +14,9 @@ app.use(express.json());
 // ===============================================
 let sessions = {};
 
-// Cria ou recupera sessão
+// ===============================================
+// CRIA OU RECUPERA SESSÃO
+// ===============================================
 async function createSession(userId) {
     if (sessions[userId]) {
         return sessions[userId];
@@ -58,7 +60,7 @@ async function createSession(userId) {
 }
 
 // ===============================================
-// ROTA: CRIAR/INICIAR SESSÃO
+// ROTA: INICIAR SESSÃO
 // ===============================================
 app.post("/start/:userId", async (req, res) => {
     const { userId } = req.params;
@@ -84,12 +86,34 @@ app.get("/qr/:userId", async (req, res) => {
 
     const session = sessions[userId];
     if (!session) {
-        return res.status(404).json({ qr: null, status: "not_started" });
+        return res.status(404).json({
+            qr: null,
+            status: "not_started"
+        });
     }
 
     return res.json({
         qr: session.qr,
         status: session.status
+    });
+});
+
+// ===============================================
+// ✅✅✅ ROTA DE STATUS GLOBAL (ESSA ESTAVA FALTANDO)
+// ===============================================
+app.get("/status", (req, res) => {
+    const users = Object.keys(sessions);
+    let status = "offline";
+
+    if (users.length > 0) {
+        const userId = users[0];
+        status = sessions[userId]?.status || "offline";
+    }
+
+    res.json({
+        ok: true,
+        status,
+        users
     });
 });
 
